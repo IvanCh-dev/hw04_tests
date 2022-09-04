@@ -1,8 +1,4 @@
-import datetime
-
-from unittest import mock
 from django.forms import fields
-from django.utils import dateparse
 from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
 from django.core.paginator import Page
@@ -32,41 +28,44 @@ class PostsPagesTests(TestCase):
             slug='test-slug-2',
             description='Тестовое описание номер 2',
         )
-        with mock.patch('django.utils.timezone.now') as mock_now:
-            moment = dateparse.parse_datetime('2022-09-01 12:00:00')
-            for i in range(1, 16):
-                mock_now.return_value = moment + datetime.timedelta(seconds=i)
-                Post.objects.create(
-                    id=i,
-                    author=cls.user_auth,
-                    text=f'Тестовый пост номер {i}',
-                    group=cls.group_1,
-                )
         cls.guest_client = Client()
         cls.authorized_auth = Client()
         cls.authorized_auth.force_login(cls.user_auth)
         cls.user_test_user = User.objects.create_user(username='test_user')
         cls.authorized_test_user = Client()
         cls.authorized_test_user.force_login(cls.user_test_user)
-        Post.objects.create(
-            id=16,
-            author=cls.user_test_user,
-            text='Тестовый пост номер 16',
-            group=cls.group_2,
+        cls.posts_list = []
+        for i in range(1, 16):
+            cls.posts_list.append(
+                Post(
+                    id=i,
+                    author=cls.user_auth,
+                    text=f'Пост {i}',
+                    group=cls.group_1,
+                )
+            )
+        Post.objects.bulk_create(cls.posts_list)
+        cls.posts_list.append(
+            Post.objects.create(
+                id=16,
+                author=cls.user_test_user,
+                text='Пост 16',
+                group=cls.group_2,
+            )
         )
 
     def test_pages_use_correct_template(self):
         """URL-адрес использует соответствующий шаблон."""
         templates_page_names = {
             reverse('posts:index'): 'posts/index.html',
-            reverse('posts:group_list', kwargs={'slug': 'test-slug-1'}):
-                'posts/group_list.html',
-            reverse('posts:profile', kwargs={'username': 'auth'}):
-                'posts/profile.html',
-            reverse('posts:post_detail', kwargs={'post_id': 15}):
-                'posts/post_detail.html',
-            reverse('posts:post_edit', kwargs={'post_id': 15}):
-                'posts/create_post.html',
+            reverse('posts:group_list', kwargs={
+                'slug': self.group_1.slug}): 'posts/group_list.html',
+            reverse('posts:profile', kwargs={
+                'username': self.user_auth.username}): 'posts/profile.html',
+            reverse('posts:post_detail', kwargs={
+                'post_id': self.posts_list[15].id}): 'posts/post_detail.html',
+            reverse('posts:post_edit', kwargs={
+                'post_id': self.posts_list[0].id}): 'posts/create_post.html',
             reverse('posts:post_create'): 'posts/create_post.html',
         }
         for reverse_name, template in templates_page_names.items():
@@ -79,49 +78,40 @@ class PostsPagesTests(TestCase):
         response = self.guest_client.get(reverse('posts:index'))
         for i in range(3):
             first_object = response.context['page_obj'][i]
-            first_object_text = first_object.text
             self.assertEqual(
-                first_object_text, f'Тестовый пост номер {16 - i}')
+                first_object.text, self.posts_list[-1 - i].text)
 
     def test_group_list_page_show_correct_context(self):
         """Шаблон group_list сформирован с правильным контекстом."""
         response = self.guest_client.get(
-            reverse('posts:group_list', kwargs={'slug': 'test-slug-1'})
+            reverse('posts:group_list', kwargs={'slug': self.group_1.slug})
         )
         group_1 = response.context['group']
-        group_1_title = group_1.title
-        group_1_slug = group_1.slug
-        group_1_description = group_1.description
-        self.assertEqual(group_1_title, 'Тестовая группа номер 1')
-        self.assertEqual(group_1_slug, 'test-slug-1')
-        self.assertEqual(group_1_description, 'Тестовое описание номер 1')
+        self.assertEqual(group_1.title, self.group_1.title)
+        self.assertEqual(group_1.slug, self.group_1.slug)
+        self.assertEqual(group_1.description, self.group_1.description)
         for i in range(3):
             first_object = response.context['page_obj'][i]
-            first_object_text = first_object.text
-            first_object_author = first_object.author.username
-            first_object_group = first_object.group.title
             self.assertEqual(
-                first_object_text, f'Тестовый пост номер {15 - i}')
-            self.assertEqual(first_object_author, 'auth')
-            self.assertEqual(first_object_group, 'Тестовая группа номер 1')
+                first_object.text, self.posts_list[-2 - i].text)
+            self.assertEqual(first_object.author, self.user_auth)
+            self.assertEqual(first_object.group, self.group_1)
 
     def test_profile_page_show_correct_context(self):
         """Шаблон profile сформирован с правильным контекстом."""
         response = self.guest_client.get(
-            reverse('posts:profile', kwargs={'username': 'auth'})
+            reverse('posts:profile', kwargs={
+                'username': self.user_auth.username}
+            )
         )
         user = response.context['author']
-        user_username = user.username
-        self.assertEqual(user_username, 'auth')
+        self.assertEqual(user, self.user_auth)
         for i in range(3):
             first_object = response.context['page_obj'][i]
-            first_object_text = first_object.text
-            first_object_author = first_object.author.username
-            first_object_group = first_object.group.title
             self.assertEqual(
-                first_object_text, f'Тестовый пост номер {15 - i}')
-            self.assertEqual(first_object_author, 'auth')
-            self.assertEqual(first_object_group, 'Тестовая группа номер 1')
+                first_object.text, self.posts_list[-2 - i].text)
+            self.assertEqual(first_object.author, self.user_auth)
+            self.assertEqual(first_object.group, self.group_1)
 
     def test_post_detail_show_correct_context(self):
         """Шаблон post_detail сформирован с правильным контекстом."""
@@ -129,14 +119,10 @@ class PostsPagesTests(TestCase):
             reverse('posts:post_detail', kwargs={'post_id': 1})
         )
         post = response.context['post']
-        post_id = post.id
-        post_text = post.text
-        post_author = post.author.username
-        post_group = post.group.title
-        self.assertEqual(post_id, 1)
-        self.assertEqual(post_text, 'Тестовый пост номер 1')
-        self.assertEqual(post_author, 'auth')
-        self.assertEqual(post_group, 'Тестовая группа номер 1')
+        self.assertEqual(post.id, 1)
+        self.assertEqual(post.text, 'Пост 1')
+        self.assertEqual(post.author.username, 'auth')
+        self.assertEqual(post.group, self.group_1)
 
     def test_post_create_show_correct_context(self):
         """Шаблон post_create сформирован с правильным контекстом."""
@@ -157,7 +143,9 @@ class PostsPagesTests(TestCase):
     def test_post_edit_show_correct_context(self):
         """Шаблон post_edit сформирован с правильным контекстом."""
         response = self.authorized_test_user.get(
-            reverse('posts:post_edit', kwargs={'post_id': 16})
+            reverse('posts:post_edit', kwargs={
+                'post_id': self.posts_list[-1].id}
+            )
         )
         form_fields = {
             'text': fields.CharField,
@@ -174,11 +162,13 @@ class PostsPagesTests(TestCase):
         """Paginator index, group_list, profile"""
         urls_to_check = [
             reverse('posts:index'),
-            reverse('posts:group_list', kwargs={'slug': 'test-slug-1'}),
-            reverse('posts:profile', kwargs={'username': 'auth'}),
+            reverse('posts:group_list', kwargs={'slug': self.group_1.slug}),
+            reverse('posts:profile', kwargs={
+                'username': self.user_auth.username}
+            ),
         ]
         latest_posts = Post.objects.filter(
-            author__username='auth').all()[:DISPLAYED_POSTS]
+            author__username=self.user_auth.username).all()[:DISPLAYED_POSTS]
         for url in urls_to_check:
             response = self.guest_client.get(url)
             context = response.context
@@ -192,21 +182,22 @@ class PostsPagesTests(TestCase):
                     latest_posts, page_obj, transform=lambda x: x)
                 if url == reverse('posts:index'):
                     latest_posts = Post.objects.filter(
-                        author__username='auth').all()[:DISPLAYED_POSTS]
+                        author__username=(
+                            self.user_auth.username)).all()[:DISPLAYED_POSTS]
 
     def test_create_post_correct_group_and_profile(self):
         """
         Отображение поста в group_list и profile после его создания.
         """
         response = self.guest_client.get(
-            reverse('posts:group_list', kwargs={'slug': 'test-slug-2'})
+            reverse('posts:group_list', kwargs={'slug': self.group_2.slug})
         )
-        post_16 = response.context['page_obj'][0]
-        post_16_text = post_16.text
-        self.assertEqual(post_16_text, 'Тестовый пост номер 16')
+        post_other_user_group = response.context['page_obj'][0]
+        self.assertEqual(post_other_user_group.text, self.posts_list[-1].text)
         response = self.guest_client.get(
-            reverse('posts:profile', kwargs={'username': 'test_user'})
+            reverse('posts:profile', kwargs={
+                'username': self.user_test_user.username}
+            )
         )
         post_16 = response.context['page_obj'][0]
-        post_16_text = post_16.text
-        self.assertEqual(post_16_text, 'Тестовый пост номер 16')
+        self.assertEqual(post_16.text, self.posts_list[-1].text)

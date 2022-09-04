@@ -1,74 +1,116 @@
 from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
+from http import HTTPStatus
 from ..models import Group, Post
 
 
 User = get_user_model()
 
+UNAUTHORIZED_URLS = {
+    HTTPStatus.OK: {
+        '/': 'posts/index.html',
+        '/group/test-slug-1/': 'posts/group_list.html',
+        '/profile/test_user/': 'posts/profile.html',
+        '/posts/1/': 'posts/post_detail.html',
+    },
+    HTTPStatus.FOUND: {
+        '/create/': 'users/login.html',
+        '/posts/1/edit/': 'users/login.html',
+    },
+    HTTPStatus.NOT_FOUND: (
+        '/unexisting_page/',
+    )
+}
 
-class StaticURLTests(TestCase):
-    def setUp(self):
-        self.guest_client = Client()
+AUTHORIZED_NO_AUTHOR_URLS = {
+    HTTPStatus.OK: {
+        '/': 'posts/index.html',
+        '/group/test-slug-1/': 'posts/group_list.html',
+        '/profile/test_user/': 'posts/profile.html',
+        '/posts/1/': 'posts/post_detail.html',
+        '/create/': 'posts/create_post.html',
+    },
+    HTTPStatus.FOUND: {
+        '/posts/1/edit/': 'posts/post_detail.html',
+    },
+}
 
-    def test_homepage(self):
-        response = self.guest_client.get('/')
-        self.assertEqual(response.status_code, 200)
+AUTHORIZED_AUTHOR_URLS = {
+    HTTPStatus.OK: {
+        '/': 'posts/index.html',
+        '/group/test-slug-1/': 'posts/group_list.html',
+        '/profile/test_user/': 'posts/profile.html',
+        '/posts/1/': 'posts/post_detail.html',
+        '/create/': 'posts/create_post.html',
+        '/posts/1/edit/': 'posts/create_post.html',
+    },
+}
 
 
 class URLTests(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.user = User.objects.create_user(username='auth')
-        cls.group = Group.objects.create(
-            title='Тестовая группа',
-            slug='test-slug',
-            description='Тестовое описание',
+        cls.auth = User.objects.create_user(username='auth')
+        cls.group_1 = Group.objects.create(
+            title='Тестовая группа номер 1',
+            slug='test-slug-1',
+            description='Тестовое описание номер 1',
         )
-        cls.post = Post.objects.create(
+        cls.post_1 = Post.objects.create(
             id=1,
-            author=cls.user,
-            text='Тестовый пост',
+            author=cls.auth,
+            text='Тестовый пост номер 1',
         )
+        cls.guest_client = Client()
+        cls.authorized_auth = Client()
+        cls.authorized_auth.force_login(cls.auth)
+        cls.test_user = User.objects.create_user(username='test_user')
+        cls.authorized_test_user = Client()
+        cls.authorized_test_user.force_login(cls.test_user)
 
-    def setUp(self):
-        self.guest_client = Client()
-        self.user = User.objects.create_user(username='TestUser')
-        self.authorized_client = Client()
-        self.authorized_client.force_login(self.user)
+    def test_unauthorized_user(self):
+        """Проверка ответа сервера для неавторизованного пользователя."""
+        for status, urls in UNAUTHORIZED_URLS.items():
+            if status == HTTPStatus.FOUND:
+                for url, template in urls.items():
+                    response = self.guest_client.get(url, follow=True)
+                    self.assertEqual(response.status_code, HTTPStatus.OK)
+                    self.assertTemplateUsed(response, template)
+            elif status == HTTPStatus.NOT_FOUND:
+                for url in urls:
+                    response = self.guest_client.get(url)
+                    self.assertEqual(response.status_code, status)
+            else:
+                for url, template in urls.items():
+                    response = self.guest_client.get(url)
+                    self.assertEqual(response.status_code, status)
+                    self.assertTemplateUsed(response, template)
 
-    def test_home_url_exists_at_desired_location(self):
-        """Страница / доступна любому пользователю."""
-        response = self.guest_client.get('/')
-        self.assertEqual(response.status_code, 200)
+    def test_authorized_no_author(self):
+        """Проверка ответа сервера для авторизованного не автора."""
+        for status, urls in AUTHORIZED_NO_AUTHOR_URLS.items():
+            if status == HTTPStatus.FOUND:
+                for url, template in urls.items():
+                    response = self.authorized_test_user.get(url, follow=True)
+                    self.assertEqual(response.status_code, HTTPStatus.OK)
+                    self.assertTemplateUsed(response, template)
+            else:
+                for url, template in urls.items():
+                    response = self.authorized_test_user.get(url)
+                    self.assertEqual(response.status_code, status)
+                    self.assertTemplateUsed(response, template)
 
-    def test_group_url_exists_at_desired_location(self):
-        """Страница /group/ доступна любому пользователю."""
-        response = self.guest_client.get('/group/test-slug/')
-        self.assertEqual(response.status_code, 200)
-
-    def test_profile_url_exists_at_desired_location(self):
-        """Страница /profile/ доступна любому пользователю."""
-        response = self.guest_client.get('/profile/TestUser/')
-        self.assertEqual(response.status_code, 200)
-
-    def test_unexisting_page(self):
-        """Страница /unexisting_page/ не существует."""
-        response = self.guest_client.get('/unexisting_page/')
-        self.assertEqual(response.status_code, 404)
-
-    def test_posts_url_exists_at_desired_location(self):
-        """Страница /posts/1 доступна любому пользователю."""
-        response = self.guest_client.get('/posts/1/')
-        self.assertEqual(response.status_code, 200)
-
-    def test_create_url_exists_at_desired_location(self):
-        """Страница /create/ доступна авторизованному пользователю."""
-        response = self.authorized_client.get('/create/')
-        self.assertEqual(response.status_code, 200)
-
-    def test_post_edit_url_redirect_authorized_no_author(self):
-        """Страница /posts/1/edit/ перенаправит не автора на страницу поста."""
-        response = self.authorized_client.get('/posts/1/edit/', follow=True)
-        self.assertRedirects(
-            response, ('/posts/1/'))
+    def test_authorized_author(self):
+        """Проверка ответа сервера для авторизованного автора."""
+        for status, urls in AUTHORIZED_AUTHOR_URLS.items():
+            if status == HTTPStatus.FOUND:
+                for url, template in urls.items():
+                    response = self.authorized_auth.get(url, follow=True)
+                    self.assertEqual(response.status_code, HTTPStatus.OK)
+                    self.assertTemplateUsed(response, template)
+            else:
+                for url, template in urls.items():
+                    response = self.authorized_auth.get(url)
+                    self.assertEqual(response.status_code, status)
+                    self.assertTemplateUsed(response, template)
